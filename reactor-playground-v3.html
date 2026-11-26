@@ -224,6 +224,7 @@ details.card>summary .sumx{margin-left:auto;font-family:var(--font-mono);font-si
 .typerow em{font-style:normal;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
 
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+.catalog-fields{display:grid;gap:.5rem;margin-top:.6rem}.catalog-fields [hidden]{display:none}.catalog-fields input,.catalog-fields select{width:100%;min-width:0}.catalog-fields p{margin:.18rem 0}.catalog-fields small{overflow-wrap:anywhere}.catalog-fields a{color:inherit}
 </style>
 </head>
 <body>
@@ -1315,6 +1316,10 @@ function pyMaterial(m){
     if(fB>0)L.push(`${v}.add_element("B", ${nf(fB,9)}, "wo")`); L.push(`${v}.add_s_alpha_beta("c_H_in_H2O")`);}
   else if(m.kind==="D2O") L.push(`${v}.add_nuclide("H2", 2.0)`,`${v}.add_nuclide("O16", 1.0)`,`${v}.add_s_alpha_beta("c_D_in_D2O")`);
   else if(m.kind==="Zr") L.push(...[["Zr",.982],["Sn",.015],["Fe",.002],["Cr",.001]].map(([e,w])=>`${v}.add_element("${e}", ${w}, "wo")`));
+  else if(m.kind==="SS" && m.p.catalogId==="G4_STAINLESS-STEEL"){
+    const alloy = catalogEntries.find(entry => entry.id === m.p.catalogId);
+    for (const [symbol, fraction] of alloy.parts) L.push(`${v}.add_element("${symbol}", ${fraction}, "wo")`);
+  }
   else if(m.kind==="SS") L.push(...[["Fe",.70],["Cr",.17],["Ni",.12],["Mn",.01]].map(([e,w])=>`${v}.add_element("${e}", ${w}, "wo")`));
   else if(m.kind==="B4C") L.push(`${v}.add_element("B", 4.0)`,`${v}.add_element("C", 1.0)`);
   else if(m.kind==="C") L.push(`${v}.add_element("C", 1.0)`,`${v}.add_s_alpha_beta("c_Graphite")`);
@@ -1440,6 +1445,476 @@ function matUsage(){
   return use;
 }
 function typeKindLabel(t){const m=G.mats[t.mat];return t.kind==="fuel"?"fuel zone":m&&m.kind==="B4C"?"control":"reflector";}
+const catalogSymbols = '_ H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf'.split(' ');
+const catalogSource = 'https://raw.githubusercontent.com/Geant4/geant4/v11.4.0/source/materials/src/G4NistMaterialBuilder.cc';
+
+// Read the declarative material tables of this pinned release. Never execute source text.
+function parseGeantMaterials(sourceText) {
+  const start = sourceText.indexOf('void G4NistMaterialBuilder::NistSimpleMaterials()');
+  if (start < 0) throw new Error('Material tables unavailable');
+  const body = sourceText.slice(start).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const entries = [];
+  let entry;
+  let expected = 0;
+  const finish = () => {
+    if (!entry) return;
+    if (entry.parts.length !== expected || !entry.parts.every(([symbol, value]) =>
+      catalogSymbols.includes(symbol) && Number.isFinite(value) && value > 0)) throw new Error('Invalid composition');
+    entries.push(entry);
+  };
+  for (const call of body.matchAll(/\b(AddMaterial|AddElementByAtomCount|AddElementByWeightFraction)\s*\(([^();]*)\)\s*;/g)) {
+    const args = call[2].match(/"[^"]*"|[^,"\s][^,]*/g).map(s => s.trim().replace(/^"|"$/g, ''));
+    if (call[1] === 'AddMaterial') {
+      finish();
+      entry = null;
+      // Galactic vacuum uses a symbolic density rather than a tabulated material density.
+      if (args[0] === 'G4_Galactic') continue;
+      const density = Number(args[1]);
+      if (!Number.isFinite(density) || density <= 0) throw new Error('Invalid reference density: ' + args.slice(0,2).join(', '));
+      const z = Number(args[2]);
+      expected = Number(args[4] || 1);
+      entry = { id: args[0], density, excitation: Number(args[3]) || null,
+        state: (args[5] || 'kStateSolid').replace('kState', '').toLowerCase(),
+        basis: 'ao', parts: z > 0 ? [[catalogSymbols[z], 1]] : [] };
+    } else if (entry) {
+      const symbol = /^\d+$/.test(args[0]) ? catalogSymbols[Number(args[0])] : args[0];
+      entry.basis = call[1] === 'AddElementByAtomCount' ? 'ao' : 'wo';
+      entry.parts.push([symbol, Number(args[1])]);
+    }
+  }
+  finish();
+  return entries;
+}
+
+const catalogSnapshot = [
+{"id":"G4_WATER","density":1,"excitation":78,"state":"liquid","basis":"ao","parts":[["H",2],["O",1]]},
+{"id":"G4_H","density":0.000083748,"excitation":19.2,"state":"gas","basis":"ao","parts":[["H",1]]},
+{"id":"G4_He","density":0.000166322,"excitation":41.8,"state":"gas","basis":"ao","parts":[["He",1]]},
+{"id":"G4_Li","density":0.534,"excitation":40,"state":"solid","basis":"ao","parts":[["Li",1]]},
+{"id":"G4_Be","density":1.848,"excitation":63.7,"state":"solid","basis":"ao","parts":[["Be",1]]},
+{"id":"G4_B","density":2.37,"excitation":76,"state":"solid","basis":"ao","parts":[["B",1]]},
+{"id":"G4_C","density":2,"excitation":81,"state":"solid","basis":"ao","parts":[["C",1]]},
+{"id":"G4_N","density":0.0011652,"excitation":82,"state":"gas","basis":"ao","parts":[["N",1]]},
+{"id":"G4_O","density":0.00133151,"excitation":95,"state":"gas","basis":"ao","parts":[["O",1]]},
+{"id":"G4_F","density":0.00158029,"excitation":115,"state":"gas","basis":"ao","parts":[["F",1]]},
+{"id":"G4_Ne","density":0.000838505,"excitation":137,"state":"gas","basis":"ao","parts":[["Ne",1]]},
+{"id":"G4_Na","density":0.971,"excitation":149,"state":"solid","basis":"ao","parts":[["Na",1]]},
+{"id":"G4_Mg","density":1.74,"excitation":156,"state":"solid","basis":"ao","parts":[["Mg",1]]},
+{"id":"G4_Al","density":2.699,"excitation":166,"state":"solid","basis":"ao","parts":[["Al",1]]},
+{"id":"G4_Si","density":2.33,"excitation":173,"state":"solid","basis":"ao","parts":[["Si",1]]},
+{"id":"G4_P","density":2.2,"excitation":173,"state":"solid","basis":"ao","parts":[["P",1]]},
+{"id":"G4_S","density":2,"excitation":180,"state":"solid","basis":"ao","parts":[["S",1]]},
+{"id":"G4_Cl","density":0.00299473,"excitation":174,"state":"gas","basis":"ao","parts":[["Cl",1]]},
+{"id":"G4_Ar","density":0.00166201,"excitation":188,"state":"gas","basis":"ao","parts":[["Ar",1]]},
+{"id":"G4_K","density":0.862,"excitation":190,"state":"solid","basis":"ao","parts":[["K",1]]},
+{"id":"G4_Ca","density":1.55,"excitation":191,"state":"solid","basis":"ao","parts":[["Ca",1]]},
+{"id":"G4_Sc","density":2.989,"excitation":216,"state":"solid","basis":"ao","parts":[["Sc",1]]},
+{"id":"G4_Ti","density":4.54,"excitation":233,"state":"solid","basis":"ao","parts":[["Ti",1]]},
+{"id":"G4_V","density":6.11,"excitation":245,"state":"solid","basis":"ao","parts":[["V",1]]},
+{"id":"G4_Cr","density":7.18,"excitation":257,"state":"solid","basis":"ao","parts":[["Cr",1]]},
+{"id":"G4_Mn","density":7.44,"excitation":272,"state":"solid","basis":"ao","parts":[["Mn",1]]},
+{"id":"G4_Fe","density":7.874,"excitation":286,"state":"solid","basis":"ao","parts":[["Fe",1]]},
+{"id":"G4_Co","density":8.9,"excitation":297,"state":"solid","basis":"ao","parts":[["Co",1]]},
+{"id":"G4_Ni","density":8.902,"excitation":311,"state":"solid","basis":"ao","parts":[["Ni",1]]},
+{"id":"G4_Cu","density":8.96,"excitation":322,"state":"solid","basis":"ao","parts":[["Cu",1]]},
+{"id":"G4_Zn","density":7.133,"excitation":330,"state":"solid","basis":"ao","parts":[["Zn",1]]},
+{"id":"G4_Ga","density":5.904,"excitation":334,"state":"solid","basis":"ao","parts":[["Ga",1]]},
+{"id":"G4_Ge","density":5.323,"excitation":350,"state":"solid","basis":"ao","parts":[["Ge",1]]},
+{"id":"G4_As","density":5.73,"excitation":347,"state":"solid","basis":"ao","parts":[["As",1]]},
+{"id":"G4_Se","density":4.5,"excitation":348,"state":"solid","basis":"ao","parts":[["Se",1]]},
+{"id":"G4_Br","density":0.0070721,"excitation":343,"state":"gas","basis":"ao","parts":[["Br",1]]},
+{"id":"G4_Kr","density":0.00347832,"excitation":352,"state":"gas","basis":"ao","parts":[["Kr",1]]},
+{"id":"G4_Rb","density":1.532,"excitation":363,"state":"solid","basis":"ao","parts":[["Rb",1]]},
+{"id":"G4_Sr","density":2.54,"excitation":366,"state":"solid","basis":"ao","parts":[["Sr",1]]},
+{"id":"G4_Y","density":4.469,"excitation":379,"state":"solid","basis":"ao","parts":[["Y",1]]},
+{"id":"G4_Zr","density":6.506,"excitation":393,"state":"solid","basis":"ao","parts":[["Zr",1]]},
+{"id":"G4_Nb","density":8.57,"excitation":417,"state":"solid","basis":"ao","parts":[["Nb",1]]},
+{"id":"G4_Mo","density":10.22,"excitation":424,"state":"solid","basis":"ao","parts":[["Mo",1]]},
+{"id":"G4_Tc","density":11.5,"excitation":428,"state":"solid","basis":"ao","parts":[["Tc",1]]},
+{"id":"G4_Ru","density":12.41,"excitation":441,"state":"solid","basis":"ao","parts":[["Ru",1]]},
+{"id":"G4_Rh","density":12.41,"excitation":449,"state":"solid","basis":"ao","parts":[["Rh",1]]},
+{"id":"G4_Pd","density":12.02,"excitation":470,"state":"solid","basis":"ao","parts":[["Pd",1]]},
+{"id":"G4_Ag","density":10.5,"excitation":470,"state":"solid","basis":"ao","parts":[["Ag",1]]},
+{"id":"G4_Cd","density":8.65,"excitation":469,"state":"solid","basis":"ao","parts":[["Cd",1]]},
+{"id":"G4_In","density":7.31,"excitation":488,"state":"solid","basis":"ao","parts":[["In",1]]},
+{"id":"G4_Sn","density":7.31,"excitation":488,"state":"solid","basis":"ao","parts":[["Sn",1]]},
+{"id":"G4_Sb","density":6.691,"excitation":487,"state":"solid","basis":"ao","parts":[["Sb",1]]},
+{"id":"G4_Te","density":6.24,"excitation":485,"state":"solid","basis":"ao","parts":[["Te",1]]},
+{"id":"G4_I","density":4.93,"excitation":491,"state":"solid","basis":"ao","parts":[["I",1]]},
+{"id":"G4_Xe","density":0.00548536,"excitation":482,"state":"gas","basis":"ao","parts":[["Xe",1]]},
+{"id":"G4_Cs","density":1.873,"excitation":488,"state":"solid","basis":"ao","parts":[["Cs",1]]},
+{"id":"G4_Ba","density":3.5,"excitation":491,"state":"solid","basis":"ao","parts":[["Ba",1]]},
+{"id":"G4_La","density":6.154,"excitation":501,"state":"solid","basis":"ao","parts":[["La",1]]},
+{"id":"G4_Ce","density":6.657,"excitation":523,"state":"solid","basis":"ao","parts":[["Ce",1]]},
+{"id":"G4_Pr","density":6.71,"excitation":535,"state":"solid","basis":"ao","parts":[["Pr",1]]},
+{"id":"G4_Nd","density":6.9,"excitation":546,"state":"solid","basis":"ao","parts":[["Nd",1]]},
+{"id":"G4_Pm","density":7.22,"excitation":560,"state":"solid","basis":"ao","parts":[["Pm",1]]},
+{"id":"G4_Sm","density":7.46,"excitation":574,"state":"solid","basis":"ao","parts":[["Sm",1]]},
+{"id":"G4_Eu","density":5.243,"excitation":580,"state":"solid","basis":"ao","parts":[["Eu",1]]},
+{"id":"G4_Gd","density":7.9004,"excitation":591,"state":"solid","basis":"ao","parts":[["Gd",1]]},
+{"id":"G4_Tb","density":8.229,"excitation":614,"state":"solid","basis":"ao","parts":[["Tb",1]]},
+{"id":"G4_Dy","density":8.55,"excitation":628,"state":"solid","basis":"ao","parts":[["Dy",1]]},
+{"id":"G4_Ho","density":8.795,"excitation":650,"state":"solid","basis":"ao","parts":[["Ho",1]]},
+{"id":"G4_Er","density":9.066,"excitation":658,"state":"solid","basis":"ao","parts":[["Er",1]]},
+{"id":"G4_Tm","density":9.321,"excitation":674,"state":"solid","basis":"ao","parts":[["Tm",1]]},
+{"id":"G4_Yb","density":6.73,"excitation":684,"state":"solid","basis":"ao","parts":[["Yb",1]]},
+{"id":"G4_Lu","density":9.84,"excitation":694,"state":"solid","basis":"ao","parts":[["Lu",1]]},
+{"id":"G4_Hf","density":13.31,"excitation":705,"state":"solid","basis":"ao","parts":[["Hf",1]]},
+{"id":"G4_Ta","density":16.654,"excitation":718,"state":"solid","basis":"ao","parts":[["Ta",1]]},
+{"id":"G4_W","density":19.3,"excitation":727,"state":"solid","basis":"ao","parts":[["W",1]]},
+{"id":"G4_Re","density":21.02,"excitation":736,"state":"solid","basis":"ao","parts":[["Re",1]]},
+{"id":"G4_Os","density":22.57,"excitation":746,"state":"solid","basis":"ao","parts":[["Os",1]]},
+{"id":"G4_Ir","density":22.42,"excitation":757,"state":"solid","basis":"ao","parts":[["Ir",1]]},
+{"id":"G4_Pt","density":21.45,"excitation":790,"state":"solid","basis":"ao","parts":[["Pt",1]]},
+{"id":"G4_Au","density":19.32,"excitation":790,"state":"solid","basis":"ao","parts":[["Au",1]]},
+{"id":"G4_Hg","density":13.546,"excitation":800,"state":"solid","basis":"ao","parts":[["Hg",1]]},
+{"id":"G4_Tl","density":11.72,"excitation":810,"state":"solid","basis":"ao","parts":[["Tl",1]]},
+{"id":"G4_Pb","density":11.35,"excitation":823,"state":"solid","basis":"ao","parts":[["Pb",1]]},
+{"id":"G4_Bi","density":9.747,"excitation":823,"state":"solid","basis":"ao","parts":[["Bi",1]]},
+{"id":"G4_Po","density":9.32,"excitation":830,"state":"solid","basis":"ao","parts":[["Po",1]]},
+{"id":"G4_At","density":9.32,"excitation":825,"state":"solid","basis":"ao","parts":[["At",1]]},
+{"id":"G4_Rn","density":0.00900662,"excitation":794,"state":"gas","basis":"ao","parts":[["Rn",1]]},
+{"id":"G4_Fr","density":1,"excitation":827,"state":"solid","basis":"ao","parts":[["Fr",1]]},
+{"id":"G4_Ra","density":5,"excitation":826,"state":"solid","basis":"ao","parts":[["Ra",1]]},
+{"id":"G4_Ac","density":10.07,"excitation":841,"state":"solid","basis":"ao","parts":[["Ac",1]]},
+{"id":"G4_Th","density":11.72,"excitation":847,"state":"solid","basis":"ao","parts":[["Th",1]]},
+{"id":"G4_Pa","density":15.37,"excitation":878,"state":"solid","basis":"ao","parts":[["Pa",1]]},
+{"id":"G4_U","density":18.95,"excitation":890,"state":"solid","basis":"ao","parts":[["U",1]]},
+{"id":"G4_Np","density":20.25,"excitation":902,"state":"solid","basis":"ao","parts":[["Np",1]]},
+{"id":"G4_Pu","density":19.84,"excitation":921,"state":"solid","basis":"ao","parts":[["Pu",1]]},
+{"id":"G4_Am","density":13.67,"excitation":934,"state":"solid","basis":"ao","parts":[["Am",1]]},
+{"id":"G4_Cm","density":13.51,"excitation":939,"state":"solid","basis":"ao","parts":[["Cm",1]]},
+{"id":"G4_Bk","density":14,"excitation":952,"state":"solid","basis":"ao","parts":[["Bk",1]]},
+{"id":"G4_Cf","density":10,"excitation":966,"state":"solid","basis":"ao","parts":[["Cf",1]]},
+{"id":"G4_A-150_TISSUE","density":1.127,"excitation":65.1,"state":"solid","basis":"wo","parts":[["H",0.101327],["C",0.775501],["N",0.035057],["O",0.052316],["F",0.017422],["Ca",0.018378]]},
+{"id":"G4_ACETONE","density":0.7899,"excitation":64.2,"state":"liquid","basis":"ao","parts":[["C",3],["H",6],["O",1]]},
+{"id":"G4_ACETYLENE","density":0.0010967,"excitation":58.2,"state":"gas","basis":"ao","parts":[["C",2],["H",2]]},
+{"id":"G4_ADENINE","density":1.35,"excitation":71.4,"state":"solid","basis":"ao","parts":[["C",5],["H",5],["N",5]]},
+{"id":"G4_ADIPOSE_TISSUE_ICRP","density":0.95,"excitation":63.2,"state":"solid","basis":"wo","parts":[["H",0.114],["C",0.598],["N",0.007],["O",0.278],["Na",0.001],["S",0.001],["Cl",0.001]]},
+{"id":"G4_AIR","density":0.00120479,"excitation":85.7,"state":"gas","basis":"wo","parts":[["C",0.000124],["N",0.755267],["O",0.231781],["Ar",0.012827]]},
+{"id":"G4_ALANINE","density":1.42,"excitation":71.9,"state":"solid","basis":"ao","parts":[["C",3],["H",7],["N",1],["O",2]]},
+{"id":"G4_ALUMINUM_OXIDE","density":3.97,"excitation":145.2,"state":"solid","basis":"ao","parts":[["Al",2],["O",3]]},
+{"id":"G4_AMBER","density":1.1,"excitation":63.2,"state":"solid","basis":"wo","parts":[["H",0.10593],["C",0.788973],["O",0.105096]]},
+{"id":"G4_AMMONIA","density":0.000826019,"excitation":53.7,"state":"gas","basis":"ao","parts":[["N",1],["H",3]]},
+{"id":"G4_ANILINE","density":1.0235,"excitation":66.2,"state":"solid","basis":"ao","parts":[["C",6],["H",7],["N",1]]},
+{"id":"G4_ANTHRACENE","density":1.283,"excitation":69.5,"state":"solid","basis":"ao","parts":[["C",14],["H",10]]},
+{"id":"G4_B-100_BONE","density":1.45,"excitation":85.9,"state":"solid","basis":"wo","parts":[["H",0.065471],["C",0.536945],["N",0.0215],["O",0.032085],["F",0.167411],["Ca",0.176589]]},
+{"id":"G4_BAKELITE","density":1.25,"excitation":72.4,"state":"solid","basis":"wo","parts":[["H",0.057441],["C",0.774591],["O",0.167968]]},
+{"id":"G4_BARIUM_FLUORIDE","density":4.89,"excitation":375.9,"state":"solid","basis":"ao","parts":[["Ba",1],["F",2]]},
+{"id":"G4_BARIUM_SULFATE","density":4.5,"excitation":285.7,"state":"solid","basis":"ao","parts":[["Ba",1],["S",1],["O",4]]},
+{"id":"G4_BENZENE","density":0.87865,"excitation":63.4,"state":"liquid","basis":"ao","parts":[["C",6],["H",6]]},
+{"id":"G4_BERYLLIUM_OXIDE","density":3.01,"excitation":93.2,"state":"solid","basis":"ao","parts":[["Be",1],["O",1]]},
+{"id":"G4_BGO","density":7.13,"excitation":534.1,"state":"solid","basis":"ao","parts":[["Bi",4],["Ge",3],["O",12]]},
+{"id":"G4_BLOOD_ICRP","density":1.06,"excitation":75.2,"state":"liquid","basis":"wo","parts":[["H",0.102],["C",0.11],["N",0.033],["O",0.745],["Na",0.001],["P",0.001],["S",0.002],["Cl",0.003],["K",0.002],["Fe",0.001]]},
+{"id":"G4_BONE_COMPACT_ICRU","density":1.85,"excitation":91.9,"state":"solid","basis":"wo","parts":[["H",0.064],["C",0.278],["N",0.027],["O",0.41],["Mg",0.002],["P",0.07],["S",0.002],["Ca",0.147]]},
+{"id":"G4_BONE_CORTICAL_ICRP","density":1.92,"excitation":110,"state":"solid","basis":"wo","parts":[["H",0.034],["C",0.155],["N",0.042],["O",0.435],["Na",0.001],["Mg",0.002],["P",0.103],["S",0.003],["Ca",0.225]]},
+{"id":"G4_BORON_CARBIDE","density":2.52,"excitation":84.7,"state":"solid","basis":"ao","parts":[["B",4],["C",1]]},
+{"id":"G4_BORON_OXIDE","density":1.812,"excitation":99.6,"state":"solid","basis":"ao","parts":[["B",2],["O",3]]},
+{"id":"G4_BRAIN_ICRP","density":1.04,"excitation":73.3,"state":"solid","basis":"wo","parts":[["H",0.107],["C",0.145],["N",0.022],["O",0.712],["Na",0.002],["P",0.004],["S",0.002],["Cl",0.003],["K",0.003]]},
+{"id":"G4_BUTANE","density":0.00249343,"excitation":48.3,"state":"gas","basis":"ao","parts":[["C",4],["H",10]]},
+{"id":"G4_N-BUTYL_ALCOHOL","density":0.8098,"excitation":59.9,"state":"liquid","basis":"ao","parts":[["C",4],["H",10],["O",1]]},
+{"id":"G4_C-552","density":1.76,"excitation":86.8,"state":"solid","basis":"wo","parts":[["H",0.02468],["C",0.50161],["O",0.004527],["F",0.465209],["Si",0.003973]]},
+{"id":"G4_CADMIUM_TELLURIDE","density":6.2,"excitation":539.3,"state":"solid","basis":"ao","parts":[["Cd",1],["Te",1]]},
+{"id":"G4_CADMIUM_TUNGSTATE","density":7.9,"excitation":468.3,"state":"solid","basis":"ao","parts":[["Cd",1],["W",1],["O",4]]},
+{"id":"G4_CALCIUM_CARBONATE","density":2.8,"excitation":136.4,"state":"solid","basis":"ao","parts":[["Ca",1],["C",1],["O",3]]},
+{"id":"G4_CALCIUM_FLUORIDE","density":3.18,"excitation":166,"state":"solid","basis":"ao","parts":[["Ca",1],["F",2]]},
+{"id":"G4_CALCIUM_OXIDE","density":3.3,"excitation":176.1,"state":"solid","basis":"ao","parts":[["Ca",1],["O",1]]},
+{"id":"G4_CALCIUM_SULFATE","density":2.96,"excitation":152.3,"state":"solid","basis":"ao","parts":[["Ca",1],["S",1],["O",4]]},
+{"id":"G4_CALCIUM_TUNGSTATE","density":6.062,"excitation":395,"state":"solid","basis":"ao","parts":[["Ca",1],["W",1],["O",4]]},
+{"id":"G4_CARBON_DIOXIDE","density":0.00184212,"excitation":85,"state":"gas","basis":"ao","parts":[["C",1],["O",2]]},
+{"id":"G4_CARBON_TETRACHLORIDE","density":1.594,"excitation":166.3,"state":"solid","basis":"ao","parts":[["C",1],["Cl",4]]},
+{"id":"G4_CELLULOSE_CELLOPHANE","density":1.42,"excitation":77.6,"state":"solid","basis":"ao","parts":[["C",6],["H",10],["O",5]]},
+{"id":"G4_CELLULOSE_BUTYRATE","density":1.2,"excitation":74.6,"state":"solid","basis":"wo","parts":[["H",0.067125],["C",0.545403],["O",0.387472]]},
+{"id":"G4_CELLULOSE_NITRATE","density":1.49,"excitation":87,"state":"solid","basis":"wo","parts":[["H",0.029216],["C",0.271296],["N",0.121276],["O",0.578212]]},
+{"id":"G4_CERIC_SULFATE","density":1.03,"excitation":76.7,"state":"solid","basis":"wo","parts":[["H",0.107596],["N",0.0008],["O",0.874976],["S",0.014627],["Ce",0.002001]]},
+{"id":"G4_CESIUM_FLUORIDE","density":4.115,"excitation":440.7,"state":"solid","basis":"ao","parts":[["Cs",1],["F",1]]},
+{"id":"G4_CESIUM_IODIDE","density":4.51,"excitation":553.1,"state":"solid","basis":"ao","parts":[["Cs",1],["I",1]]},
+{"id":"G4_CHLOROBENZENE","density":1.1058,"excitation":89.1,"state":"solid","basis":"ao","parts":[["C",6],["H",5],["Cl",1]]},
+{"id":"G4_CHLOROFORM","density":1.4832,"excitation":156,"state":"solid","basis":"ao","parts":[["C",1],["H",1],["Cl",3]]},
+{"id":"G4_CONCRETE","density":2.3,"excitation":135.2,"state":"solid","basis":"wo","parts":[["H",0.01],["C",0.001],["O",0.529107],["Na",0.016],["Mg",0.002],["Al",0.033872],["Si",0.337021],["K",0.013],["Ca",0.044],["Fe",0.014]]},
+{"id":"G4_CYCLOHEXANE","density":0.779,"excitation":56.4,"state":"solid","basis":"ao","parts":[["C",6],["H",12]]},
+{"id":"G4_1,2-DICHLOROBENZENE","density":1.3048,"excitation":106.5,"state":"solid","basis":"ao","parts":[["C",6],["H",4],["Cl",2]]},
+{"id":"G4_DICHLORODIETHYL_ETHER","density":1.2199,"excitation":103.3,"state":"solid","basis":"ao","parts":[["C",4],["H",8],["O",1],["Cl",2]]},
+{"id":"G4_1,2-DICHLOROETHANE","density":1.2351,"excitation":111.9,"state":"liquid","basis":"ao","parts":[["C",2],["H",4],["Cl",2]]},
+{"id":"G4_DIETHYL_ETHER","density":0.71378,"excitation":60,"state":"liquid","basis":"ao","parts":[["C",4],["H",10],["O",1]]},
+{"id":"G4_N,N-DIMETHYL_FORMAMIDE","density":0.9487,"excitation":66.6,"state":"liquid","basis":"ao","parts":[["C",3],["H",7],["N",1],["O",1]]},
+{"id":"G4_DIMETHYL_SULFOXIDE","density":1.1014,"excitation":98.6,"state":"liquid","basis":"ao","parts":[["C",2],["H",6],["O",1],["S",1]]},
+{"id":"G4_ETHANE","density":0.00125324,"excitation":45.4,"state":"gas","basis":"ao","parts":[["C",2],["H",6]]},
+{"id":"G4_ETHYL_ALCOHOL","density":0.7893,"excitation":62.9,"state":"liquid","basis":"ao","parts":[["C",2],["H",6],["O",1]]},
+{"id":"G4_ETHYL_CELLULOSE","density":1.13,"excitation":69.3,"state":"solid","basis":"wo","parts":[["H",0.090027],["C",0.585182],["O",0.324791]]},
+{"id":"G4_ETHYLENE","density":0.00117497,"excitation":50.7,"state":"gas","basis":"ao","parts":[["C",2],["H",4]]},
+{"id":"G4_EYE_LENS_ICRP","density":1.07,"excitation":73.3,"state":"solid","basis":"wo","parts":[["H",0.096],["C",0.195],["N",0.057],["O",0.646],["Na",0.001],["P",0.001],["S",0.003],["Cl",0.001]]},
+{"id":"G4_FERRIC_OXIDE","density":5.2,"excitation":227.3,"state":"solid","basis":"ao","parts":[["Fe",2],["O",3]]},
+{"id":"G4_FERROBORIDE","density":7.15,"excitation":261,"state":"solid","basis":"ao","parts":[["Fe",1],["B",1]]},
+{"id":"G4_FERROUS_OXIDE","density":5.7,"excitation":248.6,"state":"solid","basis":"ao","parts":[["Fe",1],["O",1]]},
+{"id":"G4_FERROUS_SULFATE","density":1.024,"excitation":76.4,"state":"solid","basis":"wo","parts":[["H",0.108259],["N",0.000027],["O",0.878636],["Na",0.000022],["S",0.012968],["Cl",0.000034],["Fe",0.000054]]},
+{"id":"G4_FREON-12","density":1.12,"excitation":143,"state":"liquid","basis":"wo","parts":[["C",0.099335],["F",0.314247],["Cl",0.586418]]},
+{"id":"G4_FREON-12B2","density":1.8,"excitation":284.9,"state":"liquid","basis":"wo","parts":[["C",0.057245],["F",0.181096],["Br",0.761659]]},
+{"id":"G4_FREON-13","density":0.95,"excitation":126.6,"state":"liquid","basis":"wo","parts":[["C",0.114983],["F",0.545622],["Cl",0.339396]]},
+{"id":"G4_FREON-13B1","density":1.5,"excitation":210.5,"state":"liquid","basis":"ao","parts":[["C",1],["F",3],["Br",1]]},
+{"id":"G4_FREON-13I1","density":1.8,"excitation":293.5,"state":"liquid","basis":"wo","parts":[["C",0.061309],["F",0.290924],["I",0.647767]]},
+{"id":"G4_GADOLINIUM_OXYSULFIDE","density":7.44,"excitation":493.3,"state":"solid","basis":"ao","parts":[["Gd",2],["O",2],["S",1]]},
+{"id":"G4_GALLIUM_ARSENIDE","density":5.31,"excitation":384.9,"state":"solid","basis":"ao","parts":[["Ga",1],["As",1]]},
+{"id":"G4_GEL_PHOTO_EMULSION","density":1.2914,"excitation":74.8,"state":"solid","basis":"wo","parts":[["H",0.08118],["C",0.41606],["N",0.11124],["O",0.38064],["S",0.01088]]},
+{"id":"G4_Pyrex_Glass","density":2.23,"excitation":134,"state":"solid","basis":"wo","parts":[["B",0.040064],["O",0.539562],["Na",0.028191],["Al",0.011644],["Si",0.37722],["K",0.003321]]},
+{"id":"G4_GLASS_LEAD","density":6.22,"excitation":526.4,"state":"solid","basis":"wo","parts":[["O",0.156453],["Si",0.080866],["Ti",0.008092],["As",0.002651],["Pb",0.751938]]},
+{"id":"G4_GLASS_PLATE","density":2.4,"excitation":145.4,"state":"solid","basis":"wo","parts":[["O",0.4598],["Na",0.096441],["Si",0.336553],["Ca",0.107205]]},
+{"id":"G4_GLUTAMINE","density":1.46,"excitation":73.3,"state":"solid","basis":"ao","parts":[["C",5],["H",10],["N",2],["O",3]]},
+{"id":"G4_GLYCEROL","density":1.2613,"excitation":72.6,"state":"solid","basis":"ao","parts":[["C",3],["H",8],["O",3]]},
+{"id":"G4_GUANINE","density":1.58,"excitation":75,"state":"solid","basis":"ao","parts":[["C",5],["H",5],["N",5],["O",1]]},
+{"id":"G4_GYPSUM","density":2.32,"excitation":129.7,"state":"solid","basis":"ao","parts":[["Ca",1],["S",1],["O",6],["H",4]]},
+{"id":"G4_N-HEPTANE","density":0.68376,"excitation":54.4,"state":"solid","basis":"ao","parts":[["C",7],["H",16]]},
+{"id":"G4_N-HEXANE","density":0.6603,"excitation":54,"state":"solid","basis":"ao","parts":[["C",6],["H",14]]},
+{"id":"G4_KAPTON","density":1.42,"excitation":79.6,"state":"solid","basis":"ao","parts":[["C",22],["H",10],["N",2],["O",5]]},
+{"id":"G4_LANTHANUM_OXYBROMIDE","density":6.28,"excitation":439.7,"state":"solid","basis":"ao","parts":[["La",1],["Br",1],["O",1]]},
+{"id":"G4_LANTHANUM_OXYSULFIDE","density":5.86,"excitation":421.2,"state":"solid","basis":"ao","parts":[["La",2],["O",2],["S",1]]},
+{"id":"G4_LEAD_OXIDE","density":9.53,"excitation":766.7,"state":"solid","basis":"wo","parts":[["O",0.071682],["Pb",0.928318]]},
+{"id":"G4_LITHIUM_AMIDE","density":1.178,"excitation":55.5,"state":"solid","basis":"ao","parts":[["Li",1],["N",1],["H",2]]},
+{"id":"G4_LITHIUM_CARBONATE","density":2.11,"excitation":87.9,"state":"solid","basis":"ao","parts":[["Li",2],["C",1],["O",3]]},
+{"id":"G4_LITHIUM_FLUORIDE","density":2.635,"excitation":94,"state":"solid","basis":"ao","parts":[["Li",1],["F",1]]},
+{"id":"G4_LITHIUM_HYDRIDE","density":0.82,"excitation":36.5,"state":"solid","basis":"ao","parts":[["Li",1],["H",1]]},
+{"id":"G4_LITHIUM_IODIDE","density":3.494,"excitation":485.1,"state":"solid","basis":"ao","parts":[["Li",1],["I",1]]},
+{"id":"G4_LITHIUM_OXIDE","density":2.013,"excitation":73.6,"state":"solid","basis":"ao","parts":[["Li",2],["O",1]]},
+{"id":"G4_LITHIUM_TETRABORATE","density":2.44,"excitation":94.6,"state":"solid","basis":"ao","parts":[["Li",2],["B",4],["O",7]]},
+{"id":"G4_LUNG_ICRP","density":1.04,"excitation":75.3,"state":"solid","basis":"wo","parts":[["H",0.105],["C",0.083],["N",0.023],["O",0.779],["Na",0.002],["P",0.001],["S",0.002],["Cl",0.003],["K",0.002]]},
+{"id":"G4_M3_WAX","density":1.05,"excitation":67.9,"state":"solid","basis":"wo","parts":[["H",0.114318],["C",0.655823],["O",0.092183],["Mg",0.134792],["Ca",0.002883]]},
+{"id":"G4_MAGNESIUM_CARBONATE","density":2.958,"excitation":118,"state":"solid","basis":"ao","parts":[["Mg",1],["C",1],["O",3]]},
+{"id":"G4_MAGNESIUM_FLUORIDE","density":3,"excitation":134.3,"state":"solid","basis":"ao","parts":[["Mg",1],["F",2]]},
+{"id":"G4_MAGNESIUM_OXIDE","density":3.58,"excitation":143.8,"state":"solid","basis":"ao","parts":[["Mg",1],["O",1]]},
+{"id":"G4_MAGNESIUM_TETRABORATE","density":2.53,"excitation":108.3,"state":"solid","basis":"ao","parts":[["Mg",1],["B",4],["O",7]]},
+{"id":"G4_MERCURIC_IODIDE","density":6.36,"excitation":684.5,"state":"solid","basis":"ao","parts":[["Hg",1],["I",2]]},
+{"id":"G4_METHANE","density":0.000667151,"excitation":41.7,"state":"gas","basis":"ao","parts":[["C",1],["H",4]]},
+{"id":"G4_METHANOL","density":0.7914,"excitation":67.6,"state":"liquid","basis":"ao","parts":[["C",1],["H",4],["O",1]]},
+{"id":"G4_MIX_D_WAX","density":0.99,"excitation":60.9,"state":"solid","basis":"wo","parts":[["H",0.13404],["C",0.77796],["O",0.03502],["Mg",0.038594],["Ti",0.014386]]},
+{"id":"G4_MS20_TISSUE","density":1,"excitation":75.1,"state":"solid","basis":"wo","parts":[["H",0.081192],["C",0.583442],["N",0.017798],["O",0.186381],["Mg",0.130287],["Cl",0.0009]]},
+{"id":"G4_MUSCLE_SKELETAL_ICRP","density":1.05,"excitation":75.3,"state":"solid","basis":"wo","parts":[["H",0.102],["C",0.143],["N",0.034],["O",0.71],["Na",0.001],["P",0.002],["S",0.003],["Cl",0.001],["K",0.004]]},
+{"id":"G4_MUSCLE_STRIATED_ICRU","density":1.04,"excitation":74.7,"state":"solid","basis":"wo","parts":[["H",0.102],["C",0.123],["N",0.035],["O",0.729],["Na",0.001],["P",0.002],["S",0.004],["K",0.003]]},
+{"id":"G4_MUSCLE_WITH_SUCROSE","density":1.11,"excitation":74.3,"state":"solid","basis":"wo","parts":[["H",0.098234],["C",0.156214],["N",0.035451],["O",0.7101]]},
+{"id":"G4_MUSCLE_WITHOUT_SUCROSE","density":1.07,"excitation":74.2,"state":"solid","basis":"wo","parts":[["H",0.101969],["C",0.120058],["N",0.035451],["O",0.742522]]},
+{"id":"G4_NAPHTHALENE","density":1.145,"excitation":68.4,"state":"solid","basis":"ao","parts":[["C",10],["H",8]]},
+{"id":"G4_NITROBENZENE","density":1.19867,"excitation":75.8,"state":"solid","basis":"ao","parts":[["C",6],["H",5],["N",1],["O",2]]},
+{"id":"G4_NITROUS_OXIDE","density":0.00183094,"excitation":84.9,"state":"gas","basis":"ao","parts":[["N",2],["O",1]]},
+{"id":"G4_NYLON-8062","density":1.08,"excitation":64.3,"state":"solid","basis":"wo","parts":[["H",0.103509],["C",0.648415],["N",0.099536],["O",0.148539]]},
+{"id":"G4_NYLON-6-6","density":1.14,"excitation":63.9,"state":"solid","basis":"ao","parts":[["C",6],["H",11],["N",1],["O",1]]},
+{"id":"G4_NYLON-6-10","density":1.14,"excitation":63.2,"state":"solid","basis":"wo","parts":[["H",0.107062],["C",0.680449],["N",0.099189],["O",0.1133]]},
+{"id":"G4_NYLON-11_RILSAN","density":1.425,"excitation":61.6,"state":"solid","basis":"wo","parts":[["H",0.115476],["C",0.720819],["N",0.076417],["O",0.087289]]},
+{"id":"G4_OCTANE","density":0.7026,"excitation":54.7,"state":"liquid","basis":"ao","parts":[["C",8],["H",18]]},
+{"id":"G4_PARAFFIN","density":0.93,"excitation":55.9,"state":"solid","basis":"ao","parts":[["C",25],["H",52]]},
+{"id":"G4_N-PENTANE","density":0.6262,"excitation":53.6,"state":"liquid","basis":"ao","parts":[["C",5],["H",12]]},
+{"id":"G4_PHOTO_EMULSION","density":3.815,"excitation":331,"state":"solid","basis":"wo","parts":[["H",0.0141],["C",0.072261],["N",0.01932],["O",0.066101],["S",0.00189],["Br",0.349103],["Ag",0.474105],["I",0.00312]]},
+{"id":"G4_PLASTIC_SC_VINYLTOLUENE","density":1.032,"excitation":64.7,"state":"solid","basis":"ao","parts":[["C",9],["H",10]]},
+{"id":"G4_PLUTONIUM_DIOXIDE","density":11.46,"excitation":746.5,"state":"solid","basis":"ao","parts":[["Pu",1],["O",2]]},
+{"id":"G4_POLYACRYLONITRILE","density":1.17,"excitation":69.6,"state":"solid","basis":"ao","parts":[["C",3],["H",3],["N",1]]},
+{"id":"G4_POLYCARBONATE","density":1.2,"excitation":73.1,"state":"solid","basis":"ao","parts":[["C",16],["H",14],["O",3]]},
+{"id":"G4_POLYCHLOROSTYRENE","density":1.3,"excitation":81.7,"state":"solid","basis":"ao","parts":[["C",8],["H",7],["Cl",1]]},
+{"id":"G4_POLYETHYLENE","density":0.94,"excitation":57.4,"state":"solid","basis":"ao","parts":[["C",1],["H",2]]},
+{"id":"G4_MYLAR","density":1.4,"excitation":78.7,"state":"solid","basis":"ao","parts":[["C",10],["H",8],["O",4]]},
+{"id":"G4_PLEXIGLASS","density":1.19,"excitation":74,"state":"solid","basis":"ao","parts":[["C",5],["H",8],["O",2]]},
+{"id":"G4_POLYOXYMETHYLENE","density":1.425,"excitation":77.4,"state":"solid","basis":"ao","parts":[["C",1],["H",2],["O",1]]},
+{"id":"G4_POLYPROPYLENE","density":0.9,"excitation":56.5,"state":"solid","basis":"ao","parts":[["C",2],["H",4]]},
+{"id":"G4_POLYSTYRENE","density":1.06,"excitation":68.7,"state":"solid","basis":"ao","parts":[["C",8],["H",8]]},
+{"id":"G4_TEFLON","density":2.2,"excitation":99.1,"state":"solid","basis":"ao","parts":[["C",2],["F",4]]},
+{"id":"G4_POLYTRIFLUOROCHLOROETHYLENE","density":2.1,"excitation":120.7,"state":"solid","basis":"ao","parts":[["C",2],["F",3],["Cl",1]]},
+{"id":"G4_POLYVINYL_ACETATE","density":1.19,"excitation":73.7,"state":"solid","basis":"ao","parts":[["C",4],["H",6],["O",2]]},
+{"id":"G4_POLYVINYL_ALCOHOL","density":1.3,"excitation":69.7,"state":"liquid","basis":"ao","parts":[["C",2],["H",4],["O",1]]},
+{"id":"G4_POLYVINYL_BUTYRAL","density":1.12,"excitation":67.2,"state":"solid","basis":"ao","parts":[["C",8],["H",14],["O",2]]},
+{"id":"G4_POLYVINYL_CHLORIDE","density":1.3,"excitation":108.2,"state":"solid","basis":"ao","parts":[["C",2],["H",3],["Cl",1]]},
+{"id":"G4_POLYVINYLIDENE_CHLORIDE","density":1.7,"excitation":134.3,"state":"solid","basis":"ao","parts":[["C",2],["H",2],["Cl",2]]},
+{"id":"G4_POLYVINYLIDENE_FLUORIDE","density":1.76,"excitation":88.8,"state":"solid","basis":"ao","parts":[["C",2],["H",2],["F",2]]},
+{"id":"G4_POLYVINYL_PYRROLIDONE","density":1.25,"excitation":67.7,"state":"solid","basis":"ao","parts":[["C",6],["H",9],["N",1],["O",1]]},
+{"id":"G4_POTASSIUM_IODIDE","density":3.13,"excitation":431.9,"state":"solid","basis":"ao","parts":[["K",1],["I",1]]},
+{"id":"G4_POTASSIUM_OXIDE","density":2.32,"excitation":189.9,"state":"solid","basis":"ao","parts":[["K",2],["O",1]]},
+{"id":"G4_PROPANE","density":0.00187939,"excitation":47.1,"state":"gas","basis":"ao","parts":[["C",3],["H",8]]},
+{"id":"G4_lPROPANE","density":0.43,"excitation":52,"state":"liquid","basis":"ao","parts":[["C",3],["H",8]]},
+{"id":"G4_N-PROPYL_ALCOHOL","density":0.8035,"excitation":61.1,"state":"liquid","basis":"ao","parts":[["C",3],["H",8],["O",1]]},
+{"id":"G4_PYRIDINE","density":0.9819,"excitation":66.2,"state":"solid","basis":"ao","parts":[["C",5],["H",5],["N",1]]},
+{"id":"G4_RUBBER_BUTYL","density":0.92,"excitation":56.5,"state":"solid","basis":"wo","parts":[["H",0.143711],["C",0.856289]]},
+{"id":"G4_RUBBER_NATURAL","density":0.92,"excitation":59.8,"state":"solid","basis":"wo","parts":[["H",0.118371],["C",0.881629]]},
+{"id":"G4_RUBBER_NEOPRENE","density":1.23,"excitation":93,"state":"solid","basis":"wo","parts":[["H",0.05692],["C",0.542646],["Cl",0.400434]]},
+{"id":"G4_SILICON_DIOXIDE","density":2.32,"excitation":139.2,"state":"solid","basis":"ao","parts":[["Si",1],["O",2]]},
+{"id":"G4_SILVER_BROMIDE","density":6.473,"excitation":486.6,"state":"solid","basis":"ao","parts":[["Ag",1],["Br",1]]},
+{"id":"G4_SILVER_CHLORIDE","density":5.56,"excitation":398.4,"state":"solid","basis":"ao","parts":[["Ag",1],["Cl",1]]},
+{"id":"G4_SILVER_HALIDES","density":6.47,"excitation":487.1,"state":"solid","basis":"wo","parts":[["Br",0.422895],["Ag",0.573748],["I",0.003357]]},
+{"id":"G4_SILVER_IODIDE","density":6.01,"excitation":543.5,"state":"solid","basis":"ao","parts":[["Ag",1],["I",1]]},
+{"id":"G4_SKIN_ICRP","density":1.09,"excitation":72.7,"state":"solid","basis":"wo","parts":[["H",0.1],["C",0.204],["N",0.042],["O",0.645],["Na",0.002],["P",0.001],["S",0.002],["Cl",0.003],["K",0.001]]},
+{"id":"G4_SODIUM_CARBONATE","density":2.532,"excitation":125,"state":"solid","basis":"ao","parts":[["Na",2],["C",1],["O",3]]},
+{"id":"G4_SODIUM_IODIDE","density":3.667,"excitation":452,"state":"solid","basis":"ao","parts":[["Na",1],["I",1]]},
+{"id":"G4_SODIUM_MONOXIDE","density":2.27,"excitation":148.8,"state":"solid","basis":"ao","parts":[["Na",2],["O",1]]},
+{"id":"G4_SODIUM_NITRATE","density":2.261,"excitation":114.6,"state":"solid","basis":"ao","parts":[["Na",1],["N",1],["O",3]]},
+{"id":"G4_STILBENE","density":0.9707,"excitation":67.7,"state":"solid","basis":"ao","parts":[["C",14],["H",12]]},
+{"id":"G4_SUCROSE","density":1.5805,"excitation":77.5,"state":"solid","basis":"ao","parts":[["C",12],["H",22],["O",11]]},
+{"id":"G4_TERPHENYL","density":1.24,"excitation":71.7,"state":"solid","basis":"ao","parts":[["C",18],["H",14]]},
+{"id":"G4_TESTIS_ICRP","density":1.04,"excitation":75,"state":"solid","basis":"wo","parts":[["H",0.106],["C",0.099],["N",0.02],["O",0.766],["Na",0.002],["P",0.001],["S",0.002],["Cl",0.002],["K",0.002]]},
+{"id":"G4_TETRACHLOROETHYLENE","density":1.625,"excitation":159.2,"state":"solid","basis":"ao","parts":[["C",2],["Cl",4]]},
+{"id":"G4_THALLIUM_CHLORIDE","density":7.004,"excitation":690.3,"state":"solid","basis":"ao","parts":[["Tl",1],["Cl",1]]},
+{"id":"G4_TISSUE_SOFT_ICRP","density":1.03,"excitation":72.3,"state":"solid","basis":"wo","parts":[["H",0.105],["C",0.256],["N",0.027],["O",0.602],["Na",0.001],["P",0.002],["S",0.003],["Cl",0.002],["K",0.002]]},
+{"id":"G4_TISSUE_SOFT_ICRU-4","density":1,"excitation":74.9,"state":"solid","basis":"wo","parts":[["H",0.101],["C",0.111],["N",0.026],["O",0.762]]},
+{"id":"G4_TISSUE-METHANE","density":0.00106409,"excitation":61.2,"state":"gas","basis":"wo","parts":[["H",0.101869],["C",0.456179],["N",0.035172],["O",0.40678]]},
+{"id":"G4_TISSUE-PROPANE","density":0.00182628,"excitation":59.5,"state":"gas","basis":"wo","parts":[["H",0.102672],["C",0.56894],["N",0.035022],["O",0.293366]]},
+{"id":"G4_TITANIUM_DIOXIDE","density":4.26,"excitation":179.5,"state":"solid","basis":"ao","parts":[["Ti",1],["O",2]]},
+{"id":"G4_TOLUENE","density":0.8669,"excitation":62.5,"state":"solid","basis":"ao","parts":[["C",7],["H",8]]},
+{"id":"G4_TRICHLOROETHYLENE","density":1.46,"excitation":148.1,"state":"solid","basis":"ao","parts":[["C",2],["H",1],["Cl",3]]},
+{"id":"G4_TRIETHYL_PHOSPHATE","density":1.07,"excitation":81.2,"state":"solid","basis":"ao","parts":[["C",6],["H",15],["O",4],["P",1]]},
+{"id":"G4_TUNGSTEN_HEXAFLUORIDE","density":2.4,"excitation":354.4,"state":"solid","basis":"ao","parts":[["W",1],["F",6]]},
+{"id":"G4_URANIUM_DICARBIDE","density":11.28,"excitation":752,"state":"solid","basis":"ao","parts":[["U",1],["C",2]]},
+{"id":"G4_URANIUM_MONOCARBIDE","density":13.63,"excitation":862,"state":"solid","basis":"ao","parts":[["U",1],["C",1]]},
+{"id":"G4_URANIUM_OXIDE","density":10.96,"excitation":720.6,"state":"solid","basis":"ao","parts":[["U",1],["O",2]]},
+{"id":"G4_UREA","density":1.323,"excitation":72.8,"state":"solid","basis":"ao","parts":[["C",1],["H",4],["N",2],["O",1]]},
+{"id":"G4_VALINE","density":1.23,"excitation":67.7,"state":"solid","basis":"ao","parts":[["C",5],["H",11],["N",1],["O",2]]},
+{"id":"G4_VITON","density":1.8,"excitation":98.6,"state":"solid","basis":"wo","parts":[["H",0.009417],["C",0.280555],["F",0.710028]]},
+{"id":"G4_WATER_VAPOR","density":0.000756182,"excitation":71.6,"state":"gas","basis":"ao","parts":[["H",2],["O",1]]},
+{"id":"G4_XYLENE","density":0.87,"excitation":61.8,"state":"solid","basis":"ao","parts":[["C",8],["H",10]]},
+{"id":"G4_GRAPHITE","density":2.21,"excitation":81,"state":"solid","basis":"ao","parts":[["C",1]]},
+{"id":"G4_lH2","density":0.0708,"excitation":21.8,"state":"liquid","basis":"ao","parts":[["H",1]]},
+{"id":"G4_lN2","density":0.807,"excitation":82,"state":"liquid","basis":"ao","parts":[["N",1]]},
+{"id":"G4_lO2","density":1.141,"excitation":95,"state":"liquid","basis":"ao","parts":[["O",1]]},
+{"id":"G4_lAr","density":1.396,"excitation":188,"state":"liquid","basis":"ao","parts":[["Ar",1]]},
+{"id":"G4_lBr","density":3.1028,"excitation":343,"state":"liquid","basis":"ao","parts":[["Br",1]]},
+{"id":"G4_lKr","density":2.418,"excitation":352,"state":"liquid","basis":"ao","parts":[["Kr",1]]},
+{"id":"G4_lXe","density":2.953,"excitation":482,"state":"liquid","basis":"ao","parts":[["Xe",1]]},
+{"id":"G4_PbWO4","density":8.28,"excitation":null,"state":"solid","basis":"ao","parts":[["O",4],["Pb",1],["W",1]]},
+{"id":"G4_GRAPHITE_POROUS","density":1.7,"excitation":81,"state":"solid","basis":"ao","parts":[["C",1]]},
+{"id":"G4_LUCITE","density":1.19,"excitation":74,"state":"solid","basis":"wo","parts":[["H",0.080538],["C",0.599848],["O",0.319614]]},
+{"id":"G4_BRASS","density":8.52,"excitation":null,"state":"solid","basis":"wo","parts":[["Cu",0.57515],["Zn",0.33415],["Pb",0.0907]]},
+{"id":"G4_BRONZE","density":8.82,"excitation":null,"state":"solid","basis":"wo","parts":[["Cu",0.8494],["Zn",0.0884],["Pb",0.0622]]},
+{"id":"G4_STAINLESS-STEEL","density":8,"excitation":null,"state":"solid","basis":"wo","parts":[["Fe",0.7462],["Cr",0.169],["Ni",0.0848]]},
+{"id":"G4_CR39","density":1.32,"excitation":null,"state":"solid","basis":"ao","parts":[["H",18],["C",12],["O",7]]},
+{"id":"G4_OCTADECANOL","density":0.812,"excitation":null,"state":"solid","basis":"ao","parts":[["H",38],["C",18],["O",1]]},
+{"id":"G4_KEVLAR","density":1.44,"excitation":null,"state":"solid","basis":"ao","parts":[["C",14],["H",10],["O",2],["N",2]]},
+{"id":"G4_DACRON","density":1.4,"excitation":null,"state":"solid","basis":"ao","parts":[["C",10],["H",8],["O",4]]},
+{"id":"G4_NEOPRENE","density":1.23,"excitation":null,"state":"solid","basis":"ao","parts":[["C",4],["H",5],["Cl",1]]},
+{"id":"G4_CYTOSINE","density":1.3,"excitation":72,"state":"solid","basis":"ao","parts":[["H",5],["C",4],["N",3],["O",1]]},
+{"id":"G4_THYMINE","density":1.48,"excitation":72,"state":"solid","basis":"ao","parts":[["H",6],["C",5],["N",2],["O",2]]},
+{"id":"G4_URACIL","density":1.32,"excitation":72,"state":"solid","basis":"ao","parts":[["H",4],["C",4],["N",2],["O",2]]},
+{"id":"G4_DEOXYRIBOSE","density":1.5,"excitation":72,"state":"solid","basis":"ao","parts":[["H",10],["C",5],["O",4]]},
+{"id":"G4_PHOSPHORIC_ACID","density":1.87,"excitation":72,"state":"solid","basis":"ao","parts":[["H",3],["P",1],["O",4]]},
+{"id":"G4_DNA_DEOXYRIBOSE","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["H",7],["C",5],["O",1]]},
+{"id":"G4_DNA_PHOSPHATE","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["P",1],["O",4]]},
+{"id":"G4_DNA_ADENINE","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["H",4],["C",5],["N",5]]},
+{"id":"G4_DNA_GUANINE","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["H",4],["C",5],["N",5],["O",1]]},
+{"id":"G4_DNA_CYTOSINE","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["H",4],["C",4],["N",3],["O",1]]},
+{"id":"G4_DNA_THYMINE","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["H",5],["C",5],["N",2],["O",2]]},
+{"id":"G4_DNA_URACIL","density":1,"excitation":72,"state":"solid","basis":"ao","parts":[["H",3],["C",4],["N",2],["O",2]]}
+];
+const catalogKind = {
+  G4_WATER: 'H2O', G4_He: 'He', G4_BORON_CARBIDE: 'B4C',
+  G4_GRAPHITE_POROUS: 'C', G4_URANIUM_OXIDE: 'UO2', 'G4_STAINLESS-STEEL': 'SS'
+};
+const catalogElementNames = ('hydrogen helium lithium beryllium boron carbon nitrogen oxygen fluorine neon sodium magnesium aluminium silicon phosphorus sulfur chlorine argon potassium calcium scandium titanium vanadium chromium manganese iron cobalt nickel copper zinc gallium germanium arsenic selenium bromine krypton rubidium strontium yttrium zirconium niobium molybdenum technetium ruthenium rhodium palladium silver cadmium indium tin antimony tellurium iodine xenon caesium barium lanthanum cerium praseodymium neodymium promethium samarium europium gadolinium terbium dysprosium holmium erbium thulium ytterbium lutetium hafnium tantalum tungsten rhenium osmium iridium platinum gold mercury thallium lead bismuth polonium astatine radon francium radium actinium thorium protactinium uranium neptunium plutonium americium curium berkelium californium').split(' ');
+let catalogEntries = catalogSnapshot;
+const catalogView = document.createElement('details');
+catalogView.className = 'matcard';
+catalogView.innerHTML = `<summary><b>Material database</b></summary>
+  <div class="catalog-fields">
+    <label class="lab">Find material<input type="search" data-c="search" placeholder="Water, stainless steel, iron…" /></label>
+    <label class="lab">Matching materials<select data-c="results"></select></label>
+    <p class="hint" data-c="count" aria-live="polite"></p>
+    <div data-c="properties"></div>
+    <label class="lab" data-c="slotLabel">Apply to model material<select data-c="slot"></select></label>
+    <p class="hint" data-c="effect"></p>
+    <button type="button" data-c="apply">Apply reference</button>
+    <p class="hint" data-c="message" role="status"></p>
+    <p class="hint"><a href="https://geant4.web.cern.ch/documentation/dev/bfad_html/ForApplicationDevelopers/Appendix/materialNames.html" target="_blank" rel="noopener">Geant4 material database</a> · v11.4.0 · Reference densities depend on physical conditions.</p>
+    <button type="button" data-c="reload">Reload from Geant4</button>
+    <p class="hint" data-c="sourceStatus" role="status">Bundled reference data available offline.</p>
+    <small>This product includes software developed by Members of the Geant4 Collaboration ( <a href="https://cern.ch/geant4" target="_blank" rel="noopener">http://cern.ch/geant4</a> ).</small>
+  </div>`;
+const catalogControl = key => catalogView.querySelector('[data-c="' + key + '"]');
+function catalogLabel(entry) {
+  const name = entry.id.slice(3);
+  const element = catalogSymbols.indexOf(name);
+  return element > 0 ? catalogElementNames[element - 1] + ' (' + name + ')' : name.replace(/[_-]/g, ' ');
+}
+function catalogMatches(query) {
+  const words = query.trim().toLowerCase().replace(/aluminum/g, 'aluminium').replace(/cesium/g, 'caesium').split(/[\s_-]+/).filter(Boolean);
+  return catalogEntries.filter(entry => {
+    const haystack = (catalogLabel(entry) + ' ' + entry.id).toLowerCase();
+    return words.every(word => haystack.includes(word));
+  });
+}
+function catalogSelected() {
+  return catalogEntries.find(entry => entry.id === catalogControl('results').value);
+}
+function catalogTargets(entry) {
+  if (!entry || !catalogKind[entry.id]) return [];
+  const used = matUsage();
+  return R.mats.filter(m => m.kind === catalogKind[entry.id] && used[m.id]);
+}
+function showCatalogEntry() {
+  const entry = catalogSelected();
+  const properties = catalogControl('properties');
+  properties.replaceChildren();
+  catalogControl('message').textContent = '';
+  if (entry) {
+    const total = entry.parts.reduce((sum, part) => sum + part[1], 0);
+    const composition = entry.parts.map(([symbol, value]) => symbol + ' ' +
+      (entry.basis === 'ao' ? value : Number((100 * value / total).toPrecision(6)) + '%')).join(' · ');
+    const rows = [
+      ['Geant4 ID', entry.id], ['Reference density', entry.density + ' g/cm³'],
+      ['Geant4 state', entry.state], ['Mean excitation energy', entry.excitation === null ? 'Unspecified' : entry.excitation + ' eV'],
+      [entry.basis === 'ao' ? 'Composition by atom count' : 'Composition by mass', composition]
+    ];
+    for (const [label, value] of rows) {
+      const row = document.createElement('p');
+      const title = document.createElement('strong');
+      title.textContent = label + ': ';
+      row.append(title, value);
+      properties.append(row);
+    }
+  }
+  const targets = catalogTargets(entry);
+  const slot = catalogControl('slot');
+  const last = slot.value;
+  slot.replaceChildren(...targets.map(m => new Option('#' + m.id + ' · ' + m.name, String(m.id))));
+  if (targets.some(m => String(m.id) === last)) slot.value = last;
+  catalogControl('slotLabel').hidden = !targets.length;
+  catalogControl('apply').hidden = !targets.length;
+  catalogControl('effect').textContent = !entry ? '' : !targets.length ? 'Reference only. This preset has no matching model material.' :
+    entry.id === 'G4_STAINLESS-STEEL' ? 'Applies the reference density and alloy composition to this material and its OpenMC export.' :
+    'Applies only the reference density. All composition and isotope settings are preserved.';
+}
+function filterCatalog() {
+  const matches = catalogMatches(catalogControl('search').value);
+  const list = catalogControl('results');
+  const previous = list.value;
+  list.replaceChildren(...matches.map(entry => new Option(catalogLabel(entry), entry.id)));
+  list.disabled = !matches.length;
+  if (matches.some(entry => entry.id === previous)) list.value = previous;
+  catalogControl('count').textContent = matches.length + ' of ' + catalogEntries.length + ' materials';
+  showCatalogEntry();
+}
+catalogControl('search').addEventListener('input', filterCatalog);
+catalogControl('results').addEventListener('change', showCatalogEntry);
+catalogControl('apply').addEventListener('click', () => {
+  const entry = catalogSelected();
+  const m = catalogTargets(entry).find(item => String(item.id) === catalogControl('slot').value);
+  if (!m) return;
+  m.p.dens = entry.density;
+  if (entry.id === 'G4_STAINLESS-STEEL') {
+    m.p.catalogId = entry.id;
+    m.name = 'Stainless steel (Geant4)';
+  }
+  update(true);
+  requestAnimationFrame(() => { catalogControl('message').textContent = 'Applied ' + entry.id + ' to #' + m.id + ' · ' + m.name + '.'; });
+});
+catalogControl('reload').addEventListener('click', async () => {
+  const button = catalogControl('reload');
+  const status = catalogControl('sourceStatus');
+  button.disabled = true;
+  status.textContent = 'Loading Geant4 v11.4.0…';
+  try {
+    const response = await fetch(catalogSource, {credentials:'omit', signal:AbortSignal.timeout(12000)});
+    if (!response.ok) throw new Error('Source unavailable');
+    const entries = parseGeantMaterials(await response.text());
+    if (JSON.stringify(entries) !== JSON.stringify(catalogSnapshot)) throw new Error('Unexpected material tables');
+    catalogEntries = entries;
+    filterCatalog();
+    status.textContent = 'Verified against Geant4 v11.4.0.';
+  } catch {
+    status.textContent = 'Could not verify the online source. The bundled v11.4.0 data remain available.';
+  } finally { button.disabled = false; }
+});
+
 function renderEditors(){
   const A=R.asm, C=R.core;
   const use=matUsage();
@@ -1484,6 +1959,7 @@ function renderEditors(){
   </div></details>
   <details class="card" open><summary><h2>Materials</h2><span class="sumx">${R.mats.length-unused} in use</span></summary><div class="body">
     <p class="hint">Grouped by the job each material does in this reactor. Every choice is limited to what makes sense for that job, and the tags show which parts of the reactor a change affects.</p>
+    <div id="catalog-mount"></div>
     ${groups}
   </div></details>
   <details class="card"><summary><h2>Run settings &amp; bug demo</h2></summary><div class="body">
@@ -1496,6 +1972,8 @@ function renderEditors(){
       <select id="bug">${Object.keys(BUGS).map(k=>`<option value="${k}"${k===BUG?" selected":""}>${{none:"No bug (correct input)",overlap:"Wrong surface in fuel cell → overlap",gap:"Coolant cell forgotten → gap",barrel:"Core bounded by wrong barrel surface",missing:"Cladding uses undefined material 99"}[k]}</option>`).join("")}</select></label>
     <p class="hint">${BUGS[BUG]}</p>
   </div></details>`;
+  document.getElementById("catalog-mount").append(catalogView);
+  filterCatalog();
 }
 const ed=document.getElementById("editors");
 ed.addEventListener("input",e=>{
@@ -1572,5 +2050,81 @@ document.getElementById("presets").addEventListener("click",e=>{const b=e.target
 init3D(); loadPreset("PWR");
 
 </script>
+<!-- Bundled Geant4 material data.
+Geant4 Software License
+Version 1.0, 28 June 2006
+
+Copyright (c) Copyright Holders of the Geant4 Collaboration, 1994-2006.
+See http://cern.ch/geant4/license for details on the copyright holders.  All
+rights not expressly granted under this license are reserved.
+
+This software includes voluntary contributions made to Geant4.
+See http://cern.ch/geant4 for more information on Geant4.
+
+Installation, use, reproduction, display, modification and redistribution of
+this software, with or without modification, in source and binary forms, are
+permitted on a non-exclusive basis. Any exercise of rights by you under this
+license is subject to the following conditions:
+
+1. Redistributions of this software,  in whole or in part,  with  or without
+   modification, must reproduce the above copyright notice and these license
+   conditions  in  this  software,  the  user  documentation  and  any other
+   materials provided with the redistributed software.
+
+2. The user documentation,if any,included with a redistribution,must include
+   the following notice:"This product includes software developed by Members
+   of the Geant4 Collaboration ( http://cern.ch/geant4 )."
+   If that  is  where  third-party  acknowledgments  normally  appear,  this
+   acknowledgment  must  be  reproduced  in  the  modified  version  of this
+   software itself.
+
+3. The names "Geant4" and "The Geant4 toolkit" may not be used to endorse or
+   promote software,or products derived therefrom, except with prior written
+   permission  by  license@geant4.org.  If this software is redistributed in
+   modified form,  the name  and  reference of  the modified version must be
+   clearly distinguishable from that of this software.
+
+4. You are under no obligation to provide anyone with  any  modifications of
+   this software that you may develop,including but not limited to bug fixes,
+   patches,  upgrades  or  other enhancements or derivatives of the features,
+   functionality or performance of this software. However, if you publish or
+   distribute your modifications without  contemporaneously  requiring users
+   to enter into a separate written license agreement,  then  you are deemed
+   to have granted all  Members  and all  Copyright Holders  of  the  Geant4
+   Collaboration  a license to your  modifications,  including modifications
+   protected by any patent owned by you,under the conditions of this license.
+
+5. You may not include  this  software in  whole or in part in any patent or
+   patent  application  in  respect  of  any  modification  of this software
+   developed by you.
+
+
+6. DISCLAIMER
+
+ THIS SOFTWARE IS PROVIDED BY THE MEMBERS AND COPYRIGHT HOLDERS OF THE GEANT4
+ COLLABORATION AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ INCLUDING,  BUT NOT LIMITED TO,  IMPLIED WARRANTIES OF  MERCHANTABILITY,  OF
+ SATISFACTORY QUALITY,  AND FITNESS  FOR  A  PARTICULAR PURPOSE  OR  USE  ARE
+ DISCLAIMED. THE MEMBERS OF THE GEANT4 COLLABORATION AND CONTRIBUTORS MAKE NO
+ REPRESENTATION THAT THE SOFTWARE AND MODIFICATIONS THEREOF,WILL NOT INFRINGE
+ ANY PATENT, COPYRIGHT, TRADE SECRET OR OTHER PROPRIETARY RIGHT.
+
+7. LIMITATION OF LIABILITY
+
+ THE  MEMBERS  AND  COPYRIGHT   HOLDERS  OF  THE   GEANT4  COLLABORATION  AND
+ CONTRIBUTORS SHALL HAVE NO LIABILITY FOR DIRECT,INDIRECT,SPECIAL, INCIDENTAL,
+ CONSEQUENTIAL,  EXEMPLARY,  OR PUNITIVE DAMAGES  OF  ANY CHARACTER INCLUDING,
+ WITHOUT LIMITATION, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES, LOSS OF USE,
+ DATA OR PROFITS,  OR BUSINESS INTERRUPTION, HOWEVER CAUSED AND ON ANY THEORY
+ OF CONTRACT,  WARRANTY, TORT  (INCLUDING NEGLIGENCE),  PRODUCT LIABILITY  OR
+ OTHERWISE,  ARISING IN  ANY WAY  OUT OF THE USE  OF  THIS SOFTWARE,  EVEN IF
+ ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+8. This license  shall terminate with immediate effect and without notice if
+   you  fail  to  comply with any  of  the terms of this license,  or if you
+   institute litigation against any Member or Copyright Holder of the Geant4
+   Collaboration with regard to this software.
+
+-->
 </body>
 </html>
